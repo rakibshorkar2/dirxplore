@@ -1,0 +1,64 @@
+name: dirxplore
+description: "DirXplore - HTTP/FTP Open Directory Browser & Download Manager"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # Networking
+  dio: ^5.7.0
+
+  # HTML Parsing
+  html: ^0.15.4
+
+  # State Management
+  provider: ^6.1.2
+
+  # Local Storage
+  shared_preferences: ^2.3.3
+  sqflite: ^2.4.1
+  path: ^1.9.0
+
+  # Permissions
+  permission_handler: ^11.3.1
+
+  # URL Launching
+  url_launcher: ^6.3.1
+
+  # Package Info
+  package_info_plus: ^8.1.1
+
+  # File Picker / Path Provider
+  path_provider: ^2.1.5
+  file_picker: ^8.1.7
+
+  # HTTP Client Extensions
+  http: ^1.2.2
+  socks5_proxy: any
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.14.3
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icon/
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/icon/app_icon.png"
+  min_sdk_android: 21
+  adaptive_icon_background: "#0D1117"
+  adaptive_icon_foreground: "assets/icon/app_icon.png"

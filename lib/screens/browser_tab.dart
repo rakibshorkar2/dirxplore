@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../providers/browser_provider.dart';
 import '../providers/download_provider.dart';
 import '../providers/app_state.dart';
@@ -236,7 +237,27 @@ class _BrowserTabState extends State<BrowserTab> {
       ),
       floatingActionButton: browserState.getSelectedItems().isNotEmpty
           ? FloatingActionButton.extended(
-              onPressed: () {
+              onPressed: () async {
+                 bool hasPermission = false;
+                 if (await Permission.manageExternalStorage.isGranted || await Permission.storage.isGranted) {
+                   hasPermission = true;
+                 } else {
+                   final statusManage = await Permission.manageExternalStorage.request();
+                   final statusStorage = await Permission.storage.request();
+                   if (statusManage.isGranted || statusStorage.isGranted) {
+                     hasPermission = true;
+                   }
+                 }
+
+                 if (!hasPermission) {
+                    if (context.mounted) {
+                       ScaffoldMessenger.of(context).showSnackBar(
+                         const SnackBar(content: Text('Storage permission is required to download files.')),
+                       );
+                    }
+                    return;
+                 }
+
                  final dlProvider = context.read<DownloadProvider>();
                  final appState = context.read<AppState>();
                  final selected = browserState.getSelectedItems();
@@ -249,9 +270,11 @@ class _BrowserTabState extends State<BrowserTab> {
                     }
                  }
                  
-                 ScaffoldMessenger.of(context).showSnackBar(
-                   SnackBar(content: Text('Added ${selected.length} items to queue')),
-                 );
+                 if (context.mounted) {
+                   ScaffoldMessenger.of(context).showSnackBar(
+                     SnackBar(content: Text('Added ${selected.length} items to queue')),
+                   );
+                 }
                  
                  browserState.selectAll(false);
               },

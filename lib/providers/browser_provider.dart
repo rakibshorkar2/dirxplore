@@ -3,6 +3,8 @@ import '../models/directory_item.dart';
 import '../services/dio_client.dart';
 import '../services/html_parser.dart';
 import 'package:dio/dio.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
 
 class BrowserProvider with ChangeNotifier {
   final List<String> _history = [];
@@ -10,6 +12,12 @@ class BrowserProvider with ChangeNotifier {
   List<DirectoryItem> _items = [];
   bool _isLoading = false;
   String _errorMessage = '';
+  
+  List<Map<String, String>> _bookmarks = [];
+
+  BrowserProvider() {
+    _loadBookmarks();
+  }
   
   // Sorting & Filtering
   String _searchQuery = '';
@@ -21,6 +29,9 @@ class BrowserProvider with ChangeNotifier {
   bool get isLoading => _isLoading;
   String get errorMessage => _errorMessage;
   bool get canGoBack => _history.length > 1;
+  
+  List<Map<String, String>> get bookmarks => _bookmarks;
+  bool get isCurrentBookmarked => _bookmarks.any((b) => b['url'] == _currentUrl);
 
   final Map<String, List<String>> _categories = {
     'All Categories': [],
@@ -105,6 +116,52 @@ class BrowserProvider with ChangeNotifier {
       }
     } catch (_) {}
   }
+
+  // --- Bookmarks ---
+  Future<void> _loadBookmarks() async {
+    final prefs = await SharedPreferences.getInstance();
+    final str = prefs.getString('browser_bookmarks');
+    if (str != null) {
+      final List<dynamic> decoded = jsonDecode(str);
+      _bookmarks = decoded.map((e) => Map<String, String>.from(e)).toList();
+      notifyListeners();
+    }
+  }
+
+  Future<void> _saveBookmarks() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('browser_bookmarks', jsonEncode(_bookmarks));
+  }
+
+  void toggleBookmark() {
+    if (_currentUrl.isEmpty) return;
+    final exists = _bookmarks.any((b) => b['url'] == _currentUrl);
+    if (exists) {
+      _bookmarks.removeWhere((b) => b['url'] == _currentUrl);
+    } else {
+      String name = _currentUrl;
+      try {
+        final uri = Uri.parse(_currentUrl);
+        if (uri.pathSegments.isNotEmpty && uri.pathSegments.last.isNotEmpty) {
+          name = uri.pathSegments.last;
+        } else if (uri.pathSegments.length > 1) {
+          name = uri.pathSegments[uri.pathSegments.length - 2];
+        } else {
+          name = uri.host;
+        }
+      } catch (_) {}
+      _bookmarks.add({'url': _currentUrl, 'name': name});
+    }
+    _saveBookmarks();
+    notifyListeners();
+  }
+  
+  void removeBookmark(String url) {
+    _bookmarks.removeWhere((b) => b['url'] == url);
+    _saveBookmarks();
+    notifyListeners();
+  }
+  // -----------------
 
   void loadBreadcrumb(int index) {
     if (_currentUrl.isEmpty) return;

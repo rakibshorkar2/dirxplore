@@ -28,12 +28,18 @@ class SettingsTab extends StatelessWidget {
               items: const [
                 DropdownMenuItem(value: ThemeMode.system, child: Text('System')),
                 DropdownMenuItem(value: ThemeMode.light, child: Text('Light')),
-                DropdownMenuItem(value: ThemeMode.dark, child: Text('Dark')),
+                DropdownMenuItem(value: ThemeMode.dark, child: Text('Material Dark')),
               ],
               onChanged: (val) {
                 if (val != null) appState.setThemeMode(val);
               },
             ),
+          ),
+          SwitchListTile(
+            title: const Text('True AMOLED Black'),
+            subtitle: const Text('Pure black background for OLED screens (Requires Dark Mode)'),
+            value: appState.trueAmoledDark,
+            onChanged: (val) => appState.setTrueAmoledDark(val),
           ),
           const Divider(),
 
@@ -65,6 +71,70 @@ class SettingsTab extends StatelessWidget {
                 if(val != null) appState.setMaxConcurrentDownloads(val);
               },
             ),
+          ),
+          SwitchListTile(
+            title: const Text('Show Download Notifications'),
+            subtitle: const Text('Display progress in notification panel'),
+            value: appState.showDownloadNotifications,
+            onChanged: (val) => appState.setShowDownloadNotifications(val),
+          ),
+          ListTile(
+            title: const Text('Speed Limiter (Per Download)'),
+            subtitle: appState.speedLimitCap == 0 
+                ? const Text('Unlimited') 
+                : Text('${appState.speedLimitCap} KB/s'),
+            trailing: SizedBox(
+              width: 150,
+              child: Slider(
+                value: appState.speedLimitCap.toDouble(),
+                min: 0,
+                max: 10000,
+                divisions: 20,
+                label: appState.speedLimitCap == 0 ? 'Off' : '${appState.speedLimitCap} KB/s',
+                onChanged: (val) => appState.setSpeedLimitCap(val.toInt()),
+              ),
+            ),
+          ),
+          const Divider(),
+
+          // Automation & Smart Features
+          const Padding(
+            padding: EdgeInsets.all(16.0),
+            child: Text('SMART AUTOMATION', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
+          ),
+          SwitchListTile(
+            title: const Text('Smart Folder Routing'),
+            subtitle: const Text('Auto-sort by extension (Movies, Games, Apps)'),
+            value: appState.smartFolderRouting,
+            onChanged: (val) => appState.setSmartFolderRouting(val),
+          ),
+          SwitchListTile(
+            title: const Text('Download on Wi-Fi Only'),
+            value: appState.downloadOnWifiOnly,
+            onChanged: (val) => appState.setDownloadOnWifiOnly(val),
+          ),
+          SwitchListTile(
+            title: const Text('Pause If Battery < 15%'),
+            value: appState.pauseLowBattery,
+            onChanged: (val) => appState.setPauseLowBattery(val),
+          ),
+          SwitchListTile(
+            title: const Text('Keep Screen Awake'),
+            subtitle: const Text('Prevent sleep while downloading to maintain speed'),
+            value: appState.keepScreenAwake,
+            onChanged: (val) => appState.setKeepScreenAwake(val),
+          ),
+          const Divider(),
+
+          // Security
+          const Padding(
+            padding: EdgeInsets.all(16.0),
+            child: Text('SECURITY & PRIVACY', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
+          ),
+          SwitchListTile(
+            title: const Text('Require Fingerprint to Open App'),
+            value: appState.requireBiometrics,
+            onChanged: (val) => appState.setRequireBiometrics(val),
           ),
           const Divider(),
 

@@ -64,7 +64,7 @@ class GoCrawler {
     return jsonList.map((item) => DirectoryItem(
       name: item['name'],
       url: item['url'],
-      type: item['type'] == 'directory' ? DirectoryItemType.directory : DirectoryItemType.file, // Simplified mapping
+      type: item['type'] == 'directory' ? DirectoryItemType.directory : DirectoryItem.typeFromExtension(item['name']), // Simplified mapping
       size: item['size'],
     )).toList();
   }

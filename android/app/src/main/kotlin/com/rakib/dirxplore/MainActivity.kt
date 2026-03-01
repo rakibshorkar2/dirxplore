@@ -17,7 +17,8 @@ class MainActivity : FlutterActivity() {
                 "startForegroundService" -> {
                     val url = call.argument<String>("url") ?: ""
                     val filename = call.argument<String>("filename") ?: ""
-                    val id = call.argument<Int>("id") ?: 0
+                    val idParam = call.argument<Int>("id") ?: 0
+                    val id = if (idParam == 0) 1001 else idParam
                     
                     val intent = Intent(this, DownloadService::class.java).apply {
                         action = "START_DOWNLOAD"

@@ -5,7 +5,13 @@ import 'package:path/path.dart' as p;
 import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:isolate';
+import 'package:crypto/crypto.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:battery_plus/battery_plus.dart';
 import '../models/download_item.dart';
 import '../services/dio_client.dart';
 import '../services/html_parser.dart';
@@ -46,7 +52,7 @@ class DownloadProvider with ChangeNotifier {
     _processQueue();
   }
 
-  void addDownload(String url, String fileName, String saveDir, {String? batchId, String? batchName}) {
+  Future<void> addDownload(String url, String fileName, String saveDir, {String? batchId, String? batchName}) async {
     // Check if exactly identical item exists in queue
     if (_queue.any((i) => i.url == url)) {
       final existing = _queue.firstWhere((i) => i.url == url);
@@ -57,7 +63,28 @@ class DownloadProvider with ChangeNotifier {
     }
 
     final id = DateTime.now().millisecondsSinceEpoch.toString() + '_' + url.hashCode.toString();
-    final savePath = p.join(saveDir, fileName);
+    
+    // Apply Smart Folder Routing if enabled
+    String finalSaveDir = saveDir;
+    final prefs = await SharedPreferences.getInstance();
+    final bool smartRouting = prefs.getBool('smartFolderRouting') ?? false;
+    
+    if (smartRouting) {
+      final ext = fileName.split('.').last.toLowerCase();
+      if (['mp4', 'mkv', 'avi', 'mov', 'webm'].contains(ext)) {
+        finalSaveDir = p.join(saveDir, 'Movies');
+      } else if (['iso', 'rar', 'zip', '7z'].contains(ext)) {
+        finalSaveDir = p.join(saveDir, 'Games');
+      } else if (['apk'].contains(ext)) {
+        finalSaveDir = p.join(saveDir, 'Apps');
+      } else if (['mp3', 'flac', 'wav'].contains(ext)) {
+        finalSaveDir = p.join(saveDir, 'Music');
+      } else {
+        finalSaveDir = p.join(saveDir, 'Others');
+      }
+    }
+
+    final savePath = p.join(finalSaveDir, fileName);
     
     _queue.add(DownloadItem(
       id: id,
@@ -121,7 +148,7 @@ class DownloadProvider with ChangeNotifier {
 
   void _stopForegroundIfNoActive() {
     if (_activeCount <= 1) { // 1 because we are about to decrement
-      _channel.invokeMethod('stopForegroundService', {'id': 0}).catchError((_) {});
+      _channel.invokeMethod('stopForegroundService', {'id': 1001}).catchError((_) {});
     }
   }
 
@@ -165,9 +192,24 @@ class DownloadProvider with ChangeNotifier {
   }
 
   void pauseAll() {
+    // 1. Cancel all active transfers
     for (final id in _cancelTokens.keys.toList()) {
-      pause(id);
+      _cancelTokens[id]?.cancel('Paused by user');
+      _cancelTokens.remove(id);
     }
+    
+    // 2. Set all queued items to paused
+    for (final item in _queue) {
+      if (item.status == DownloadStatus.queued || item.status == DownloadStatus.downloading) {
+        item.status = DownloadStatus.paused;
+        item.speedBytesPerSec = 0;
+      }
+    }
+    
+    _activeCount = 0;
+    _stopForegroundIfNoActive();
+    _saveQueue();
+    notifyListeners();
   }
 
   void resumeAll() {
@@ -187,6 +229,35 @@ class DownloadProvider with ChangeNotifier {
 
       if (nextItem.id.isEmpty) break; // Nothing to download
 
+      // Check Smart Conditions before starting
+      final prefs = await SharedPreferences.getInstance();
+      
+      // 1. Wi-Fi Check
+      if (prefs.getBool('downloadOnWifiOnly') == true) {
+        var connectivityResult = await (Connectivity().checkConnectivity());
+        if (!connectivityResult.contains(ConnectivityResult.wifi)) {
+          // Pause it automatically
+          nextItem.status = DownloadStatus.paused;
+          nextItem.errorMessage = 'Paused: Waiting for Wi-Fi';
+          _saveQueue();
+          notifyListeners();
+          continue; // Skips to next item
+        }
+      }
+
+      // 2. Battery Check
+      if (prefs.getBool('pauseLowBattery') == true) {
+        final battery = Battery();
+        final level = await battery.batteryLevel;
+        if (level < 15) {
+          nextItem.status = DownloadStatus.paused;
+          nextItem.errorMessage = 'Paused: Battery below 15%';
+          _saveQueue();
+          notifyListeners();
+          continue;
+        }
+      }
+
       _startDownload(nextItem);
     }
   }
@@ -200,7 +271,7 @@ class DownloadProvider with ChangeNotifier {
     _channel.invokeMethod('startForegroundService', {
       'url': item.url,
       'filename': item.fileName,
-      'id': 0, // In a real app with multiple concurrent progress bars, pass unique IDs
+      'id': 1001, // Use non-zero ID for Android foreground service compliance
     }).catchError((_) {});
 
     final cancelToken = CancelToken();
@@ -277,7 +348,7 @@ class DownloadProvider with ChangeNotifier {
       late StreamSubscription subscription;
 
       subscription = stream.listen(
-        (chunk) {
+        (chunk) async { // Make it async to allow delay for throttling
           if (cancelToken.isCancelled) {
              subscription.cancel();
              raf.closeSync();
@@ -287,6 +358,21 @@ class DownloadProvider with ChangeNotifier {
              return;
           }
           try {
+             // ----------------- SPEED LIMITER THROTTLING -----------------
+             final prefs = await SharedPreferences.getInstance();
+             final speedLimitCapKB = prefs.getInt('speedLimitCap') ?? 0;
+             if (speedLimitCapKB > 0) {
+                // If limit is active, calculate how long downloading this chunk SHOULD take
+                // chunk.length is bytes. speedLimitCapKB is kilobytes.
+                final targetMillisForChunk = (chunk.length / (speedLimitCapKB * 1024)) * 1000;
+                
+                // Track time manually for this small chunk
+                // If we downloaded it way faster than targetMillisForChunk, sleep to throttle.
+                // Simple naive sleep for the whole duration since last block (real algorithm would track moving average)
+                await Future.delayed(Duration(milliseconds: targetMillisForChunk.toInt()));
+             }
+             // -------------------------------------------------------------
+
              raf.writeFromSync(chunk);
              item.downloadedBytes += chunk.length;
              bytesSinceLastUpdate += chunk.length;
@@ -306,7 +392,7 @@ class DownloadProvider with ChangeNotifier {
                   progressPercent = ((item.downloadedBytes / item.totalBytes) * 100).toInt();
                }
                _channel.invokeMethod('updateProgress', {
-                 'id': 0,
+                  'id': 1001,
                  'progress': progressPercent,
                  'speed': '${(item.speedBytesPerSec / 1024 / 1024).toStringAsFixed(2)} MB/s',
                }).catchError((_) {});
@@ -376,6 +462,110 @@ class DownloadProvider with ChangeNotifier {
       _saveQueue();
       notifyListeners();
       _processQueue();
+      _processQueue();
     }
   }
+
+  // --- Integrity Checker (Isolate) ---
+  Future<bool> verifyFileHash(String filePath, String expectedHash) async {
+    expectedHash = expectedHash.trim().toLowerCase();
+    if (expectedHash.isEmpty) return false;
+
+    try {
+      final file = File(filePath);
+      if (!await file.exists()) return false;
+
+      // Use Isolate to prevent UI freezing on multi-GB files
+      final String calculatedHash = await Isolate.run(() async {
+        final f = File(filePath);
+        final raf = await f.open(mode: FileMode.read);
+        
+        // Determine algorithm by length
+        var sink = expectedHash.length == 32 ? md5.startChunkedConversion(ProxySink()) : sha256.startChunkedConversion(ProxySink());
+        
+        // We use ProxySink because startChunkedConversion expects a Sink<Digest>, but we just want the final value.
+        // Actually, crypto's cleaner way in an isolate:
+        final stream = f.openRead();
+        if (expectedHash.length == 32) {
+           final digest = await md5.bind(stream).first;
+           return digest.toString();
+        } else {
+           final digest = await sha256.bind(stream).first;
+           return digest.toString();
+        }
+      });
+
+      return calculatedHash.toLowerCase() == expectedHash;
+    } catch (e) {
+      print('Hash verification error: $e');
+      return false;
+    }
+  }
+
+  // --- Export / Import Queue ---
+  Future<void> exportQueue() async {
+    try {
+      final jsonStr = jsonEncode(_queue.map((item) => item.toJson()).toList());
+      // Create a temporary file
+      final directory = Directory.systemTemp;
+      final file = File(p.join(directory.path, 'dirxplore_queue_backup.json'));
+      await file.writeAsString(jsonStr);
+      
+      // Share it
+      await Share.shareXFiles([XFile(file.path)], text: 'DirXplore Download Queue Backup');
+    } catch (e) {
+      print('Export error: $e');
+    }
+  }
+
+  Future<bool> importQueue() async {
+    try {
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+      );
+
+      if (result != null && result.files.single.path != null) {
+        final file = File(result.files.single.path!);
+        final jsonStr = await file.readAsString();
+        final List<dynamic> list = jsonDecode(jsonStr);
+        
+        // Merge with existing queue or replace? Let's merge (avoiding duplicates by URL)
+        int importedCount = 0;
+        for (var itemJson in list) {
+          final newItem = DownloadItem.fromJson(itemJson);
+          if (!_queue.any((i) => i.url == newItem.url)) {
+            // Reset status of imported items that were downloading/queued to paused 
+            // so they don't all start at once unexpectedly.
+            if (newItem.status == DownloadStatus.downloading || newItem.status == DownloadStatus.queued) {
+               newItem.status = DownloadStatus.paused;
+               newItem.speedBytesPerSec = 0;
+            }
+            _queue.add(newItem);
+            importedCount++;
+          }
+        }
+        
+        if (importedCount > 0) {
+          _saveQueue();
+          notifyListeners();
+          _processQueue();
+        }
+        return true;
+      }
+      return false;
+    } catch (e) {
+      print('Import error: $e');
+      return false;
+    }
+  }
+}
+
+// Helper for older dart runtimes if bind() isn't available, but bind() is standard.
+class ProxySink implements Sink<Digest> {
+  Digest? digest;
+  @override
+  void add(Digest data) => digest = data;
+  @override
+  void close() {}
 }

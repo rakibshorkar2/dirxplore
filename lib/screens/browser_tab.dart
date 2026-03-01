@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../providers/browser_provider.dart';
 import '../providers/download_provider.dart';
 import '../providers/app_state.dart';
+import '../models/directory_item.dart';
+import '../services/proxy_tunnel.dart';
+import 'media_player_screen.dart';
 
 class BrowserTab extends StatefulWidget {
   const BrowserTab({super.key});
@@ -38,65 +42,94 @@ class _BrowserTabState extends State<BrowserTab> {
       appBar: AppBar(
         title: const Text('Directory Browser'),
         bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(100),
+          preferredSize: const Size.fromHeight(80),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
             child: Column(
               children: [
-                // URL Bar Row
                 Row(
                   children: [
                     IconButton(
-                      icon: const Icon(Icons.arrow_back),
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.arrow_back, size: 20),
                       onPressed: browserState.canGoBack ? browserState.goBack : null,
                     ),
                     IconButton(
-                      icon: const Icon(Icons.arrow_upward),
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.arrow_upward, size: 20),
                       onPressed: browserState.goUp,
                     ),
                     Expanded(
-                      child: TextField(
-                        controller: _urlCtrl,
-                        decoration: const InputDecoration(
-                          hintText: 'Enter URL (http://...)',
-                          border: OutlineInputBorder(),
-                          isDense: true,
+                      flex: 3,
+                      child: SizedBox(
+                        height: 36,
+                        child: TextField(
+                          controller: _urlCtrl,
+                          style: const TextStyle(fontSize: 13),
+                          decoration: const InputDecoration(
+                            hintText: 'URL',
+                            contentPadding: EdgeInsets.symmetric(horizontal: 8),
+                            border: OutlineInputBorder(),
+                          ),
+                          onSubmitted: (val) => browserState.loadUrl(val),
                         ),
-                        onSubmitted: (val) => browserState.loadUrl(val),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      flex: 2,
+                      child: SizedBox(
+                        height: 36,
+                        child: TextField(
+                          controller: _searchCtrl,
+                          style: const TextStyle(fontSize: 13),
+                          decoration: const InputDecoration(
+                            hintText: 'Filter',
+                            prefixIcon: Icon(Icons.filter_list, size: 18),
+                            contentPadding: EdgeInsets.zero,
+                            border: OutlineInputBorder(),
+                          ),
+                          onChanged: browserState.setSearchQuery,
+                        ),
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.search),
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.search, size: 20),
                       onPressed: () => browserState.loadUrl(_urlCtrl.text),
                     ),
                   ],
                 ),
-                const SizedBox(height: 8),
-                // Filter Row
+                const SizedBox(height: 4),
                 Row(
                   children: [
+                    const SizedBox(width: 8),
                     Expanded(
-                      child: TextField(
-                        controller: _searchCtrl,
-                        decoration: const InputDecoration(
-                          hintText: 'Search/Filter...',
-                          prefixIcon: Icon(Icons.filter_list),
-                          border: OutlineInputBorder(),
-                          isDense: true,
+                      child: Container(
+                        height: 32,
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey.shade700),
+                          borderRadius: BorderRadius.circular(4),
                         ),
-                        onChanged: browserState.setSearchQuery,
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            value: browserState.selectedCategory,
+                            isExpanded: true,
+                            style: const TextStyle(fontSize: 12, color: Colors.blueGrey),
+                            items: browserState.categories.map((c) {
+                              return DropdownMenuItem(value: c, child: Text(c));
+                            }).toList(),
+                            onChanged: (val) {
+                              if (val != null) browserState.setCategory(val);
+                            },
+                          ),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 8),
-                    DropdownButton<String>(
-                      value: browserState.selectedCategory,
-                      items: browserState.categories.map((c) {
-                        return DropdownMenuItem(value: c, child: Text(c));
-                      }).toList(),
-                      onChanged: (val) {
-                        if (val != null) browserState.setCategory(val);
-                      },
-                    ),
+                    // Moving bookmarks/sort to this row to save space above? 
+                    // No, let's keep them in actions but make them compact.
                   ],
                 ),
               ],
@@ -104,6 +137,17 @@ class _BrowserTabState extends State<BrowserTab> {
           ),
         ),
         actions: [
+          IconButton(
+            icon: Icon(browserState.isCurrentBookmarked ? Icons.star : Icons.star_border),
+            color: browserState.isCurrentBookmarked ? Colors.amber : null,
+            tooltip: 'Bookmark Page',
+            onPressed: browserState.toggleBookmark,
+          ),
+          IconButton(
+            icon: const Icon(Icons.bookmarks),
+            tooltip: 'Bookmarks',
+            onPressed: () => _showBookmarksDialog(context, browserState),
+          ),
           IconButton(
             icon: Icon(browserState.isGridView ? Icons.list : Icons.grid_view),
             tooltip: 'Toggle View',
@@ -121,9 +165,9 @@ class _BrowserTabState extends State<BrowserTab> {
           // Breadcrumb Trail
           if (browserState.breadcrumbs.isNotEmpty)
             Container(
-              height: 40,
+              height: 32,
               padding: const EdgeInsets.symmetric(horizontal: 8.0),
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.5),
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: browserState.breadcrumbs.length,
@@ -179,16 +223,83 @@ class _BrowserTabState extends State<BrowserTab> {
                                       Stack(
                                         alignment: Alignment.topRight,
                                         children: [
-                                          Icon(
-                                            item.isDirectory ? Icons.folder : Icons.insert_drive_file,
-                                            size: 48,
-                                            color: item.isDirectory ? Colors.amber : Colors.blueGrey,
+                                          Center(
+                                            child: Stack(
+                                              alignment: Alignment.center,
+                                              children: [
+                                                if (!item.isDirectory && ['jpg', 'jpeg', 'png', 'gif', 'webp'].contains(item.name.split('.').last.toLowerCase()))
+                                                  Positioned.fill(
+                                                    child: ClipRRect(
+                                                      borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                                                      child: Image.network(
+                                                        item.url,
+                                                        fit: BoxFit.cover,
+                                                        errorBuilder: (_, __, ___) => Icon(
+                                                          _getIconForExtension(item.name),
+                                                          size: 48,
+                                                          color: _getColorForExtension(item.name),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  )
+                                                else
+                                                  Icon(
+                                                    item.isDirectory ? Icons.folder : _getIconForExtension(item.name),
+                                                    size: 48,
+                                                    color: item.isDirectory ? Colors.amber : _getColorForExtension(item.name),
+                                                  ),
+                                              ],
+                                            ),
                                           ),
                                           if (item.isSelected) 
                                             const Icon(Icons.check_circle, color: Colors.green, size: 18),
                                         ],
                                       ),
                                       const SizedBox(height: 8),
+                                      if (!item.isDirectory && _isPlayableMedia(item.name))
+                                         Row(
+                                           mainAxisAlignment: MainAxisAlignment.center,
+                                           children: [
+                                             InkWell(
+                                               onTap: () {
+                                                 Navigator.push(context, MaterialPageRoute(
+                                                   builder: (_) => MediaPlayerScreen(url: item.url, title: item.name),
+                                                 ));
+                                               },
+                                               child: Container(
+                                                 padding: const EdgeInsets.all(4),
+                                                 decoration: BoxDecoration(
+                                                    color: Colors.black45,
+                                                    borderRadius: BorderRadius.circular(20),
+                                                 ),
+                                                 child: const Icon(Icons.play_arrow, color: Colors.white, size: 20),
+                                               ),
+                                             ),
+                                             const SizedBox(width: 8),
+                                             InkWell(
+                                               onTap: () async {
+                                                 final tunnelUrl = ProxyTunnel().getTunnelUrl(item.url);
+                                                 final uri = Uri.parse(tunnelUrl);
+                                                 if (await canLaunchUrl(uri)) {
+                                                   await launchUrl(uri, mode: LaunchMode.externalApplication);
+                                                 } else {
+                                                   if (context.mounted) {
+                                                     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not open external player')));
+                                                   }
+                                                 }
+                                               },
+                                               child: Container(
+                                                 padding: const EdgeInsets.all(4),
+                                                 decoration: BoxDecoration(
+                                                    color: Colors.black45,
+                                                    borderRadius: BorderRadius.circular(20),
+                                                 ),
+                                                 child: const Icon(Icons.open_in_new, color: Colors.white, size: 20),
+                                               ),
+                                             ),
+                                           ],
+                                         ),
+                                      if (!item.isDirectory && _isPlayableMedia(item.name)) const SizedBox(height: 4),
                                       Padding(
                                         padding: const EdgeInsets.symmetric(horizontal: 4.0),
                                         child: Text(
@@ -212,20 +323,66 @@ class _BrowserTabState extends State<BrowserTab> {
                               final item = browserState.items[index];
                               return ListTile(
                                 leading: Icon(
-                                  item.isDirectory ? Icons.folder : Icons.insert_drive_file,
-                                  color: item.isDirectory ? Colors.amber : Colors.blueGrey,
+                                  item.isDirectory ? Icons.folder : _getIconForExtension(item.name),
+                                  color: item.isDirectory ? Colors.amber : _getColorForExtension(item.name),
                                 ),
-                                title: Text(item.name),
-                                subtitle: item.size != null && item.size!.isNotEmpty ? Text(item.size!) : null,
-                                trailing: Checkbox(
-                                  value: item.isSelected,
-                                  onChanged: (val) => browserState.toggleSelection(item),
+                                title: Text(
+                                  item.name,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 13, height: 1.1),
+                                ),
+                                subtitle: item.size != null && item.size!.isNotEmpty 
+                                  ? Text(item.size!, style: const TextStyle(fontSize: 11, color: Colors.blueAccent)) 
+                                  : null,
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (!item.isDirectory && _isPlayableMedia(item.name))
+                                      IconButton(
+                                        visualDensity: VisualDensity.compact,
+                                        icon: const Icon(Icons.play_circle_outline, color: Colors.blue, size: 22),
+                                        tooltip: 'Play in app',
+                                        onPressed: () {
+                                          Navigator.push(context, MaterialPageRoute(
+                                            builder: (_) => MediaPlayerScreen(url: item.url, title: item.name),
+                                          ));
+                                        },
+                                      ),
+                                    if (!item.isDirectory && _isPlayableMedia(item.name))
+                                      IconButton(
+                                        visualDensity: VisualDensity.compact,
+                                        icon: const Icon(Icons.open_in_new, color: Colors.orange, size: 22),
+                                        tooltip: 'Open in external player',
+                                        onPressed: () async {
+                                          final tunnelUrl = ProxyTunnel().getTunnelUrl(item.url);
+                                          final uri = Uri.parse(tunnelUrl);
+                                          if (await canLaunchUrl(uri)) {
+                                            await launchUrl(uri, mode: LaunchMode.externalApplication);
+                                          } else {
+                                            if (context.mounted) {
+                                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not open external player')));
+                                            }
+                                          }
+                                        },
+                                      ),
+                                    SizedBox(
+                                      width: 24,
+                                      child: Checkbox(
+                                        value: item.isSelected,
+                                        onChanged: (val) => browserState.toggleSelection(item),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                                 onTap: () {
                                   if (item.isDirectory) {
                                     _urlCtrl.text = item.url;
                                     browserState.loadUrl(item.url);
                                   } else {
+                                    // If media, play it instead of selecting by default if they tap the row directly? 
+                                    // Let's stick to selecting so they can download it. Play button is explicit.
                                     browserState.toggleSelection(item);
                                   }
                                 },
@@ -284,4 +441,76 @@ class _BrowserTabState extends State<BrowserTab> {
           : null,
     );
   }
+
+  bool _isPlayableMedia(String filename) {
+    final ext = filename.split('.').last.toLowerCase();
+    return ['mp4', 'mkv', 'avi', 'mov', 'webm'].contains(ext);
+  }
+
+  IconData _getIconForExtension(String filename) {
+    final ext = filename.split('.').last.toLowerCase();
+    if (['mp4', 'mkv', 'avi', 'mov', 'webm'].contains(ext)) return Icons.video_file;
+    if (['mp3', 'wav', 'flac'].contains(ext)) return Icons.audio_file;
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp'].contains(ext)) return Icons.image;
+    if (['zip', 'rar', '7z', 'tar', 'gz'].contains(ext)) return Icons.folder_zip;
+    if (['apk'].contains(ext)) return Icons.android;
+    return Icons.insert_drive_file;
+  }
+
+  Color _getColorForExtension(String filename) {
+    final ext = filename.split('.').last.toLowerCase();
+    if (['mp4', 'mkv', 'avi', 'mov', 'webm'].contains(ext)) return Colors.purple;
+    if (['mp3', 'wav', 'flac'].contains(ext)) return Colors.orange;
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp'].contains(ext)) return Colors.green;
+    if (['zip', 'rar', '7z', 'tar', 'gz'].contains(ext)) return Colors.red;
+    if (['apk'].contains(ext)) return Colors.greenAccent.shade700;
+    return Colors.blueGrey;
+  }
+
+  void _showBookmarksDialog(BuildContext context, BrowserProvider browserState) {
+    showDialog(
+      context: context,
+      builder: (ctx) {
+         // Use watch or read? The dialog won't automatically rebuild unless we use StatefulBuilder or proxy
+         return AlertDialog(
+           title: const Text('Bookmarks'),
+           content: SizedBox(
+             width: double.maxFinite,
+             child: Consumer<BrowserProvider>(
+               builder: (context, provider, child) {
+                 if (provider.bookmarks.isEmpty) {
+                    return const Text('No bookmarks saved yet.\nTap the star icon to save a folder.');
+                 }
+                 return ListView.builder(
+                   shrinkWrap: true,
+                   itemCount: provider.bookmarks.length,
+                   itemBuilder: (context, index) {
+                     final b = provider.bookmarks[index];
+                     return ListTile(
+                       leading: const Icon(Icons.folder_special, color: Colors.amber),
+                       title: Text(b['name'] ?? 'Unknown', maxLines: 1, overflow: TextOverflow.ellipsis),
+                       subtitle: Text(b['url'] ?? '', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 10)),
+                       trailing: IconButton(
+                         icon: const Icon(Icons.delete, color: Colors.red),
+                         onPressed: () => provider.removeBookmark(b['url']!),
+                       ),
+                       onTap: () {
+                         Navigator.pop(ctx);
+                         _urlCtrl.text = b['url']!;
+                         provider.loadUrl(b['url']!);
+                       },
+                     );
+                   }
+                 );
+               },
+             ),
+           ),
+           actions: [
+             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))
+           ],
+         );
+      }
+    );
+  }
 }
+
